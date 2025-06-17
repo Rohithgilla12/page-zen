@@ -3,24 +3,131 @@ package utils
 import (
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"page-zen/internal/logger"
 
+	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-shiori/go-readability"
 	"go.uber.org/zap"
 )
 
-func mutateFetchReadable(url string, log *zap.SugaredLogger) (readability.Article, error) {
+// CleanedArticle represents a cleaned article with both text and markdown content
+type CleanedArticle struct {
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	Markdown    string `json:"markdown"`
+	URL         string `json:"url"`
+	Author      string `json:"author,omitempty"`
+	Excerpt     string `json:"excerpt,omitempty"`
+	Length      int    `json:"length"`
+	PublishedAt string `json:"published_at,omitempty"`
+}
+
+// removeUnwantedElements removes common unwanted elements from the document
+func removeUnwantedElements(doc *goquery.Document, log *zap.SugaredLogger) {
+	unwantedSelectors := []string{
+		// Scripts and styles
+		"script", "style", "noscript",
+		// Navigation and UI elements
+		"nav", "header", "footer", ".navigation", ".nav", ".menu",
+		// Advertisements and social media
+		".ad", ".ads", ".advertisement", ".social", ".share", ".sharing",
+		".social-share", ".social-media", ".twitter", ".facebook", ".instagram",
+		// Comments and related content
+		".comments", ".comment", ".related", ".recommended", ".suggestions",
+		// Tracking and analytics
+		".analytics", ".tracking", ".pixel",
+		// Cookie notices and popups
+		".cookie", ".gdpr", ".popup", ".modal", ".overlay",
+		// Subscription and newsletter boxes
+		".subscribe", ".newsletter", ".signup", ".email-signup",
+		// Breadcrumbs and metadata that's not useful
+		".breadcrumb", ".breadcrumbs", ".tags", ".categories",
+		// Video players that might not work
+		".video-player", ".embed", "iframe[src*='youtube']", "iframe[src*='vimeo']",
+		// Common class names for unwanted content
+		"[class*='sidebar']", "[class*='widget']", "[id*='sidebar']", "[id*='widget']",
+		// Forms that are usually subscription/contact forms
+		"form:not(.search-form)",
+	}
+
+	removedCount := 0
+	for _, selector := range unwantedSelectors {
+		elements := doc.Find(selector)
+		count := elements.Length()
+		if count > 0 {
+			elements.Remove()
+			removedCount += count
+			log.Debugw("Removed unwanted elements", "selector", selector, "count", count)
+		}
+	}
+
+	if removedCount > 0 {
+		log.Infow("Total unwanted elements removed", "count", removedCount)
+	}
+}
+
+// cleanTextContent cleans up text content by removing extra whitespace and unwanted characters
+func cleanTextContent(content string) string {
+	// Remove multiple consecutive newlines
+	re := regexp.MustCompile(`\n\s*\n\s*\n+`)
+	content = re.ReplaceAllString(content, "\n\n")
+
+	// Remove excessive whitespace
+	re = regexp.MustCompile(`[ \t]+`)
+	content = re.ReplaceAllString(content, " ")
+
+	// Clean up common unwanted patterns
+	unwantedPatterns := []string{
+		`(?i)subscribe\s+to\s+our\s+newsletter`,
+		`(?i)follow\s+us\s+on`,
+		`(?i)share\s+this\s+article`,
+		`(?i)related\s+articles?`,
+		`(?i)you\s+might\s+also\s+like`,
+		`(?i)recommended\s+for\s+you`,
+		`(?i)advertisement`,
+		`(?i)sponsored\s+content`,
+	}
+
+	for _, pattern := range unwantedPatterns {
+		re = regexp.MustCompile(pattern)
+		content = re.ReplaceAllString(content, "")
+	}
+
+	// Trim whitespace
+	content = strings.TrimSpace(content)
+
+	return content
+}
+
+// generateExcerpt creates a brief excerpt from the content
+func generateExcerpt(content string, maxLength int) string {
+	if len(content) <= maxLength {
+		return content
+	}
+
+	// Find the last space before maxLength to avoid cutting words
+	excerpt := content[:maxLength]
+	lastSpace := strings.LastIndex(excerpt, " ")
+	if lastSpace > 0 && lastSpace > maxLength-50 { // Don't make it too short
+		excerpt = excerpt[:lastSpace]
+	}
+
+	return excerpt + "..."
+}
+
+func mutateFetchReadable(url string, log *zap.SugaredLogger) (CleanedArticle, error) {
 	log.Infow("Starting to fetch and parse article", "url", url)
 
 	// Make HTTP request
 	resp, err := http.Get(url)
 	if err != nil {
 		log.Errorw("Failed to fetch URL", "url", url, "error", err)
-		return readability.Article{}, err
+		return CleanedArticle{}, err
 	}
 	defer resp.Body.Close()
 
@@ -30,17 +137,22 @@ func mutateFetchReadable(url string, log *zap.SugaredLogger) (readability.Articl
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		log.Errorw("Failed to parse HTML document", "url", url, "error", err)
-		return readability.Article{}, err
+		return CleanedArticle{}, err
 	}
 
 	// Set the base URL for resolving relative URLs
 	baseURL := resp.Request.URL
 	log.Debugw("Using base URL for relative links", "base_url", baseURL.String())
 
-	// Remove script and style tags
+	// Remove unwanted elements first
+	removeUnwantedElements(doc, log)
+
+	// Remove script and style tags (additional cleanup)
 	scriptCount := doc.Find("script").Length()
 	doc.Find("script").Remove()
-	log.Debugw("Removed script tags", "count", scriptCount)
+	styleCount := doc.Find("style").Length()
+	doc.Find("style").Remove()
+	log.Debugw("Removed script and style tags", "scripts", scriptCount, "styles", styleCount)
 
 	// Handle picture elements
 	pictureCount := 0
@@ -148,41 +260,75 @@ func mutateFetchReadable(url string, log *zap.SugaredLogger) (readability.Articl
 	article, err := readability.FromDocument(htmlNode, nil)
 	if err != nil {
 		log.Errorw("Failed to convert document to readability format", "error", err)
-		return readability.Article{}, err
+		return CleanedArticle{}, err
+	}
+
+	// Clean the text content
+	cleanedTextContent := cleanTextContent(article.TextContent)
+
+	// Convert HTML content to markdown
+	log.Info("Converting HTML content to markdown")
+	converter := md.NewConverter("", true, nil)
+	markdown, err := converter.ConvertString(article.Content)
+	if err != nil {
+		log.Warnw("Failed to convert to markdown, using HTML content", "error", err)
+		markdown = article.Content // Fallback to HTML if markdown conversion fails
+	}
+
+	// Generate excerpt
+	excerpt := generateExcerpt(cleanedTextContent, 200)
+
+	cleanedArticle := CleanedArticle{
+		Title:       strings.TrimSpace(article.Title),
+		Content:     cleanedTextContent,
+		Markdown:    markdown,
+		URL:         url,
+		Author:      strings.TrimSpace(article.Byline),
+		Excerpt:     excerpt,
+		Length:      len(cleanedTextContent),
+		PublishedAt: article.PublishedTime.Format("2006-01-02T15:04:05Z07:00"),
 	}
 
 	log.Infow("Successfully processed article",
-		"title", article.Title,
-		"content_length", len(article.TextContent),
+		"title", cleanedArticle.Title,
+		"content_length", cleanedArticle.Length,
+		"markdown_length", len(cleanedArticle.Markdown),
 		"url", url,
 	)
 
-	// save the doc to a file
+	// Save the cleaned HTML to a file for debugging
 	html, err := doc.Html()
 	if err != nil {
 		log.Errorw("Failed to get HTML", "error", err)
-		return readability.Article{}, err
+	} else {
+		os.WriteFile("tmp/article.html", []byte(html), 0644)
+		log.Debugw("Saved cleaned HTML to file", "file", "tmp/article.html")
 	}
 
-	os.WriteFile("tmp/article.html", []byte(html), 0644)
-
-	return article, nil
+	return cleanedArticle, nil
 }
 
+// GetReadableArticle returns just the text content (for backward compatibility)
 func GetReadableArticle(url string) string {
+	article := GetCleanedArticle(url)
+	return article.Content
+}
+
+// GetCleanedArticle returns a comprehensive cleaned article with markdown
+func GetCleanedArticle(url string) CleanedArticle {
 	// Initialize logger for this function
 	log, err := logger.NewSugaredLogger()
 	if err != nil {
-		// Fallback to empty string if logger fails
-		return ""
+		// Fallback to empty article if logger fails
+		return CleanedArticle{}
 	}
 	defer log.Sync()
 
 	article, err := mutateFetchReadable(url, log)
 	if err != nil {
 		log.Errorw("Failed to get readable article", "url", url, "error", err)
-		return ""
+		return CleanedArticle{}
 	}
 
-	return article.TextContent
+	return article
 }
