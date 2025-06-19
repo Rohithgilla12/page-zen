@@ -25,6 +25,8 @@ func (s *Server) RegisterRoutes() http.Handler {
 	r.GET("/", s.HelloWorldHandler)
 	r.POST("/extract", s.ExtractArticleHandler)
 	r.GET("/extract", s.ExtractArticleSimpleHandler)
+	r.POST("/opengraph", s.ExtractOpenGraphHandler)
+	r.GET("/opengraph", s.ExtractOpenGraphSimpleHandler)
 
 	return r
 }

@@ -15,16 +15,17 @@ type ArticleRequest struct {
 
 // ArticleResponse represents the response for article extraction
 type ArticleResponse struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Content     string `json:"content"`
-	Markdown    string `json:"markdown,omitempty"`
-	Author      string `json:"author,omitempty"`
-	Excerpt     string `json:"excerpt,omitempty"`
-	Length      int    `json:"length"`
-	PublishedAt string `json:"published_at,omitempty"`
-	Success     bool   `json:"success"`
-	Message     string `json:"message,omitempty"`
+	URL         string               `json:"url"`
+	Title       string               `json:"title"`
+	Content     string               `json:"content"`
+	Markdown    string               `json:"markdown,omitempty"`
+	Author      string               `json:"author,omitempty"`
+	Excerpt     string               `json:"excerpt,omitempty"`
+	Length      int                  `json:"length"`
+	PublishedAt string               `json:"published_at,omitempty"`
+	OpenGraph   *utils.OpenGraphData `json:"open_graph,omitempty"`
+	Success     bool                 `json:"success"`
+	Message     string               `json:"message,omitempty"`
 }
 
 // ExtractArticleHandler handles article extraction requests
@@ -64,6 +65,7 @@ func (s *Server) ExtractArticleHandler(c *gin.Context) {
 		Excerpt:     cleanedArticle.Excerpt,
 		Length:      cleanedArticle.Length,
 		PublishedAt: cleanedArticle.PublishedAt,
+		OpenGraph:   cleanedArticle.OpenGraph,
 		Success:     true,
 	}
 
@@ -121,6 +123,7 @@ func (s *Server) ExtractArticleSimpleHandler(c *gin.Context) {
 		Excerpt:     cleanedArticle.Excerpt,
 		Length:      cleanedArticle.Length,
 		PublishedAt: cleanedArticle.PublishedAt,
+		OpenGraph:   cleanedArticle.OpenGraph,
 		Success:     true,
 	}
 
@@ -134,6 +137,107 @@ func (s *Server) ExtractArticleSimpleHandler(c *gin.Context) {
 		"title", cleanedArticle.Title,
 		"content_length", cleanedArticle.Length,
 		"include_markdown", includeMarkdown,
+	)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// OpenGraphRequest represents the request body for Open Graph extraction
+type OpenGraphRequest struct {
+	URL string `json:"url" binding:"required"`
+}
+
+// OpenGraphResponse represents the response for Open Graph extraction
+type OpenGraphResponse struct {
+	URL       string               `json:"url"`
+	OpenGraph *utils.OpenGraphData `json:"open_graph,omitempty"`
+	Success   bool                 `json:"success"`
+	Message   string               `json:"message,omitempty"`
+}
+
+// ExtractOpenGraphHandler handles Open Graph extraction requests via POST
+func (s *Server) ExtractOpenGraphHandler(c *gin.Context) {
+	s.logger.Info("ExtractOpenGraphHandler called")
+
+	var req OpenGraphRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		s.logger.Errorw("Invalid request body", "error", err)
+		c.JSON(http.StatusBadRequest, OpenGraphResponse{
+			Success: false,
+			Message: "Invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	s.logger.Infow("Processing Open Graph extraction request", "url", req.URL)
+
+	// Extract Open Graph data
+	openGraphData := utils.GetOpenGraphData(req.URL)
+
+	if openGraphData == nil || openGraphData.Title == "" {
+		s.logger.Warnw("Failed to extract Open Graph data", "url", req.URL)
+		c.JSON(http.StatusInternalServerError, OpenGraphResponse{
+			URL:     req.URL,
+			Success: false,
+			Message: "Failed to extract Open Graph data",
+		})
+		return
+	}
+
+	response := OpenGraphResponse{
+		URL:       req.URL,
+		OpenGraph: openGraphData,
+		Success:   true,
+	}
+
+	s.logger.Infow("Successfully extracted Open Graph data",
+		"url", req.URL,
+		"title", openGraphData.Title,
+		"description_length", len(openGraphData.Description),
+	)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ExtractOpenGraphSimpleHandler handles simple GET requests for Open Graph extraction
+func (s *Server) ExtractOpenGraphSimpleHandler(c *gin.Context) {
+	s.logger.Info("ExtractOpenGraphSimpleHandler called")
+
+	url := c.Query("url")
+	if url == "" {
+		s.logger.Warn("URL parameter missing")
+		c.JSON(http.StatusBadRequest, OpenGraphResponse{
+			Success: false,
+			Message: "URL parameter is required",
+		})
+		return
+	}
+
+	s.logger.Infow("Processing simple Open Graph extraction", "url", url)
+
+	// Extract Open Graph data
+	openGraphData := utils.GetOpenGraphData(url)
+
+	if openGraphData == nil || openGraphData.Title == "" {
+		s.logger.Warnw("Failed to extract Open Graph data", "url", url)
+		c.JSON(http.StatusInternalServerError, OpenGraphResponse{
+			URL:     url,
+			Success: false,
+			Message: "Failed to extract Open Graph data",
+		})
+		return
+	}
+
+	response := OpenGraphResponse{
+		URL:       url,
+		OpenGraph: openGraphData,
+		Success:   true,
+	}
+
+	s.logger.Infow("Successfully extracted Open Graph data via GET",
+		"url", url,
+		"title", openGraphData.Title,
+		"description_length", len(openGraphData.Description),
 	)
 
 	c.JSON(http.StatusOK, response)
