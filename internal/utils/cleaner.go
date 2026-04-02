@@ -418,7 +418,14 @@ func (ac *ArticleCleaner) extractFallbackMetaTags(doc *goquery.Document, og *Ope
 func (ac *ArticleCleaner) fetchAndParseDocument(pageURL string) (*goquery.Document, *url.URL, error) {
 	ac.logger.Infow("Starting to fetch and parse article", "url", pageURL)
 
-	resp, err := http.Get(pageURL)
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		ac.logger.Errorw("Failed to create request", "url", pageURL, "error", err)
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; PageZen/1.0; +https://github.com/Rohithgilla12/page-zen)")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		ac.logger.Errorw("Failed to fetch URL", "url", pageURL, "error", err)
 		return nil, nil, err
