@@ -200,6 +200,8 @@ func TestExtractOpenGraphData(t *testing.T) {
 		{"Image", og.Image, "https://example.com/image.png"},
 		{"Type", og.Type, "article"},
 		{"SiteName", og.SiteName, "Example Blog"},
+		{"Author", og.Author, "Jane Doe"},
+		{"PublishedAt", og.PublishedAt, "2025-01-15T10:00:00Z"},
 		{"TwitterCard", og.TwitterCard, "summary_large_image"},
 		{"TwitterSite", og.TwitterSite, "@example"},
 		{"TwitterCreator", og.TwitterCreator, "@janedoe"},
@@ -209,6 +211,13 @@ func TestExtractOpenGraphData(t *testing.T) {
 		if tt.got != tt.want {
 			t.Errorf("%s: got %q, want %q", tt.name, tt.got, tt.want)
 		}
+	}
+
+	if len(og.Tags) != 2 {
+		t.Fatalf("Expected 2 tags, got %d", len(og.Tags))
+	}
+	if og.Tags[0] != "go" || og.Tags[1] != "testing" {
+		t.Errorf("Expected tags [go, testing], got %v", og.Tags)
 	}
 }
 

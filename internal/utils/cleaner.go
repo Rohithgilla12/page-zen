@@ -323,7 +323,7 @@ func (ac *ArticleCleaner) extractOpenGraphData(doc *goquery.Document, pageURL st
 
 // extractOGMetaTags extracts Open Graph meta tags
 func (ac *ArticleCleaner) extractOGMetaTags(doc *goquery.Document, og *OpenGraphData) {
-	doc.Find("meta[property^='og:']").Each(func(i int, s *goquery.Selection) {
+	doc.Find("meta[property^='og:'], meta[property^='article:']").Each(func(i int, s *goquery.Selection) {
 		property, exists := s.Attr("property")
 		if !exists {
 			return
